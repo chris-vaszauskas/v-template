@@ -1,0 +1,195 @@
+<!-- TODO recursive each -->
+<!-- TODO allow v-text="this" under an each for a flat array -->
+<!-- TODO ensure references to DOM nodes are removed when the node is removed -->
+<!-- TODO will this strategy withstand DOM manipulation? -->
+<!-- TODO reuse DOM nodes on splice in each -->
+<!-- TODO bidirectional - if the element is an input, update the model on change -->
+<html>
+<head>
+    <script src="//ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+    <script src="//cdn.rawgit.com/Polymer/observe-js/master/src/observe.js"></script>
+
+    <style>
+        [v-template] {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div v-template="test">
+        <p v-text="abc"></p>
+        <p v-if="switch">If true</p>
+        <p v-unless="switch">Unless true</p>
+        <p v-each="list">
+            Hello
+            <span v-text="name"></span>
+        </p>
+        <p v-unless="list.length">Empty</p>
+    </div>
+
+    <script>
+
+    Template = {};
+
+    Template.binders = {
+
+        text : function (element, value) {
+            element.innerText = value;
+        },
+
+        if : function (element, value) {
+            element.style.display = value ? '' : 'none';
+        },
+
+        unless : function (element, value) {
+            element.style.display = value ? 'none' : '';
+        },
+
+    };
+
+    // TODO implement me =)
+    Template.iterators = {
+        each : function (element, list) {
+
+        }
+    };
+
+
+    /// Binds an element to a specific field on an object.
+    /// Each time the field changes, the binder determines
+    /// how the element is rendered.
+    Template.bind = function (element, binder, context) {
+        var path = element.attributes.getNamedItem('v-' + binder).value;
+        var observer = new PathObserver(context, path);
+        var val = observer.open(function (cur, prev) {
+            Template.binders[binder](element, cur, prev);
+        });
+        Template.binders[binder](element, val);
+    };
+
+
+    /// Returns DOM elements
+    Template.render = (function (template, context) {
+
+        var getParentIndex = function (element, parent) {
+            parent = parent || element.parentNode;
+            var sibling = element;
+            var index = 0;
+            while ((sibling = sibling.previousElementSibling) != null) {
+                ++index;
+            }
+            return index;
+        }
+
+
+        return function (template, context) {
+
+            // Clone the template node
+            template = template.cloneNode(true);
+            template.removeAttribute('v-template');
+
+            // Find all the iterators
+            var iterators = [];
+            Object.keys(Template.iterators).forEach(function (iterator) {
+                var set = template.querySelectorAll('[v-' + iterator + ']');
+                for (var i = 0; i < set.length; ++i) {
+                    // Mark which iterator this node uses so that we can
+                    // query this later
+                    set[i].dataset.__v_iterator = iterator;
+                }
+                Array.prototype.push.apply(iterators, set);
+            });
+
+            /// Returns true if the element is not a descendant of an iterator
+            var isNotIteratorDescendant = function (element) {
+                var found = false;
+                for (var i = 0; !found && i < iterators.length; ++i) {
+                    if (element !== iterators[i]) {
+                        found = iterators[i].contains(element);
+                    }
+                }
+                return !found;
+            };
+
+            // Compile every binder that is not under an iterator
+            Object.keys(Template.binders).forEach(function (binder) {
+                var elements = template.querySelectorAll('[v-' + binder + ']');
+                elements = Array.prototype.filter.call(elements, isNotIteratorDescendant)
+                .forEach(function (elem) {
+                    Template.bind(elem, binder, context);
+                });
+            });
+
+            // Compile all the iterators at this level of recursion
+            iterators.filter(isNotIteratorDescendant).forEach(function (iterator) {
+                // The first element with the v-each label is the template
+                iterator.setAttribute('v-template', '');
+
+                var iteratorName = 'v-' + iterator.dataset.__v_iterator;
+                var array = iterator.attributes.getNamedItem(iteratorName).value;
+                var observer = new ArrayObserver(context[array]);
+                observer.open(function (splices) {
+                    // Find the template element's index relative to
+                    // its parent
+                    var parent = iterator.parentNode;
+                    var index = getParentIndex(iterator, parent);
+
+                    splices.forEach(function (splice) {
+                        // Remove DOM nodes for the elements that were removed
+                        for (var i = 0; i < splice.removed.length; ++i) {
+                            var removeIndex = index + splice.index + 1;
+                            parent.removeChild(parent.children[removeIndex]);
+                        }
+
+                        // Add DOM nodes for the elements that were added
+                        for (var i = 0; i < splice.addedCount; ++i) {
+                            var obj = context[array][splice.index + i];
+                            var dom = Template.render(iterator, obj);
+                            var addIndex = index + splice.index + i + 1;
+                            parent.insertBefore(dom, parent.children[addIndex]);
+                        }
+                    });
+                });
+
+                // Create nodes from the current list
+                // TODO put this code and the block above that does the
+                // same thing in one place
+                var parent = iterator.parentNode;
+                var index = getParentIndex(iterator, parent);
+                for (var j = 0; j < context[array].length; ++j) {
+                    var dom = Template.render(iterator, context[array][j]);
+                    var addIndex = index + j + 1;
+                    parent.insertBefore(dom, parent.children[addIndex]);
+                }
+            });
+
+            return template;
+
+        };
+
+    })();
+
+
+    var o = {};
+    o.abc = 5;
+    o.switch = true;
+    o.list = [];
+    o.list.push({ name: 'Chris' });
+    o.list.push({ name: 'Jason' });
+
+    $('[v-template]').each(function () {
+        // Compile the template
+        var template = this;
+        var dom = Template.render(template, o);
+        document.body.appendChild(dom);
+    });
+
+    o.list.push({ name: 'Trey' });
+    o.list.push({ name: 'Dad' });
+
+
+    </script>
+
+</body>
+</html>
